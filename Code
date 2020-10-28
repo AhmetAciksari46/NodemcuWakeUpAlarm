@@ -1,0 +1,275 @@
+#include <NTPClient.h>
+#include <ESP8266WebServer.h>
+#include <ESP8266WiFi.h>
+#include <ESP8266Ping.h>
+#include <WiFiUdp.h>
+#include <EEPROM.h>
+const char* remote_host = "www.google.com";
+String avg_time_ms; //for ping pong
+int i;//for ping pong
+const char *mobile_ssid     = "AndroidAP";
+const char *mobile_password = "ahmet123";
+const char *router_ssid     = "ACIKSARI";  
+const char *router_password = "ahmet123";
+
+
+const int buzzer = 13; 
+const int buzzer2 = 2; 
+const int buzzer3 =15;
+const int relay1 = 16;
+const int relay2 = 5;
+const int relay3 = 4;
+const int wifiselecektorbutton = 3;
+
+IPAddress ip(192, 168, 1, 188); 
+IPAddress gateway(192, 168, 1, 1); 
+IPAddress subnet(255, 255, 255, 0);
+IPAddress primaryDNS(8, 8, 8, 8);  
+IPAddress secondaryDNS(8, 8, 4, 4); 
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP);
+ESP8266WebServer server ( 80 );
+
+
+int zero = 0;
+int eeprom_adress_0 = 0;
+int eeprom_adress_1 = 1;
+int eeprom_adress_2 = 2;
+int eeprom_adress_3 = 3;
+int eeprom_adress_4 = 4;
+int eepromalarmhour, eepromalarmminute, eepromalarmsayac;
+
+int alarmhour, alarmminute, alarmcounter, ntphour, ntpminute, offlinehour, offlineminute;
+byte buttonState; //wifi selector button
+void setup()
+{
+  buttonState= digitalRead(wifiselecektorbutton);
+  pinMode(buzzer2, OUTPUT);
+  pinMode(buzzer3, OUTPUT);
+  pinMode(buzzer, OUTPUT); 
+  digitalWrite(buzzer,LOW);
+  digitalWrite(buzzer2,LOW);
+  digitalWrite(buzzer3,LOW);
+
+    pinMode(relay1, OUTPUT); 
+    pinMode(relay2, OUTPUT); 
+    pinMode(relay3, OUTPUT); 
+
+    digitalWrite(relay1,HIGH);
+    digitalWrite(relay2,HIGH);
+    digitalWrite(relay3,HIGH);
+
+  if (buttonState == 1)
+  {
+    WiFi.config(ip, gateway, subnet, primaryDNS, secondaryDNS);
+    WiFi.begin(router_ssid, router_password);
+  }
+  else
+  {
+    WiFi.begin(mobile_ssid, mobile_password);
+  }
+
+  Serial.begin(115200);
+  EEPROM.begin(512);
+  while ( WiFi.status() != WL_CONNECTED ) {
+    delay ( 500 );
+  }
+  Serial.println(WiFi.localIP());
+  timeClient.begin();//for ntp server
+  server.on ( "/", handleRoot );
+  server.on ("/save", handleSave);
+  server.begin();
+}
+
+void loop()
+{
+   ESP.deepSleep(55e6);  //1 min sleep pin 16 to reset
+  //delay(6000); // for try 
+  if (Ping.ping(remote_host))
+  {
+    Ping.ping(remote_host, 5);  //5 time ping to google, You can change value to higher or lower
+    i = Ping.averageTime();
+    avg_time_ms = Ping.averageTime(); // reading string and Int for easy display integration.
+    connectionokey();
+  }
+  else
+  {
+    noconnection();
+  }
+}
+
+
+void connectionokey()
+{
+  timeClient.update();
+  server.handleClient();
+  alarmcheck();
+}
+
+void noconnection()
+{
+  alarmcheckoffline();
+}
+
+void alarmcheckoffline()
+{
+  eepromalarmhour = EEPROM.read(eeprom_adress_0);
+  eepromalarmminute = EEPROM.read(eeprom_adress_1);
+  offlinehour = EEPROM.read(eeprom_adress_3);
+  offlineminute = EEPROM.read(eeprom_adress_4);  //ntp last time at eeprom
+  if (offlineminute == 59)    
+  {
+    EEPROM.write(eeprom_adress_3, offlinehour + 1);  // real time save to eeprom
+    EEPROM.write(eeprom_adress_4, zero);
+    EEPROM.commit();
+  }
+  else
+  {
+    EEPROM.write(eeprom_adress_4, offlineminute + 1); 
+    EEPROM.commit();
+  }
+
+
+  if (eepromalarmhour == offlinehour && eepromalarmminute == offlineminute)
+  {
+    alarmon();
+  }
+
+}
+
+void alarmcheck()
+{
+  ntphour = timeClient.getHours();
+  ntpminute = timeClient.getMinutes(); 
+
+  EEPROM.write(eeprom_adress_3, ntphour + 3);  // for my country +3
+  EEPROM.write(eeprom_adress_4, ntpminute);
+  EEPROM.commit();
+  eepromalarmhour = EEPROM.read(eeprom_adress_0);
+  eepromalarmminute = EEPROM.read(eeprom_adress_1);
+  Serial.println(ntphour+3);
+  Serial.println(ntpminute);
+  Serial.println(eepromalarmhour);
+  Serial.println(eepromalarmminute);
+
+  if (eepromalarmhour == ntphour + 3 && eepromalarmminute == ntpminute)
+  {
+    alarmon();
+  }
+}
+
+void alarmon()
+{
+  eepromalarmsayac = EEPROM.read(eeprom_adress_2); //alarm on get counter value
+  EEPROM.write(eeprom_adress_0, zero);  // make 0 all eeprom values. after alarm the nodemcu was closed by energy button. for new alarm open by energy button.
+  EEPROM.write(eeprom_adress_1, zero);
+  EEPROM.write(eeprom_adress_2, zero);
+
+  EEPROM.write(eeprom_adress_3, zero);
+  EEPROM.write(eeprom_adress_4, zero);
+  EEPROM.commit();
+    digitalWrite(relay1,LOW);
+    digitalWrite(relay2,LOW);
+    digitalWrite(relay3,LOW);
+
+  delay(eepromalarmsayac * 60000);
+  speakerson();
+  speakerson2();
+
+}
+void speakerson()
+{
+  tone(buzzer, 1000);
+  tone(buzzer2, 1000); 
+  delay(1000);        
+  noTone(buzzer);  
+  noTone(buzzer2);        
+  delay(700);  
+  tone(buzzer, 1000);
+  tone(buzzer2, 1000); 
+  delay(1000);        
+  noTone(buzzer);  
+  noTone(buzzer2);        
+  delay(700); 
+  tone(buzzer, 1000);
+  tone(buzzer2, 1000); 
+  delay(1000);        
+  noTone(buzzer);  
+  noTone(buzzer2);        
+  delay(700); 
+
+}
+
+void speakerson2()
+{
+  digitalWrite(buzzer3,HIGH);
+  delay(300);
+  digitalWrite(buzzer3,LOW);
+  delay(9000);
+  digitalWrite(buzzer3,HIGH);
+  delay(300);
+  digitalWrite(buzzer3,LOW);
+  delay(9000);
+  digitalWrite(buzzer3,HIGH);
+  delay(300);
+  digitalWrite(buzzer3,LOW);
+  delay(9000);
+
+}
+
+
+char htmlResponse[3000];
+void handleRoot() {
+  snprintf ( htmlResponse, 3000,
+             "<!DOCTYPE html>\
+<html lang=\"tr\">\
+  <head>\
+    <meta charset=\"utf-8\">\
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+  </head>\
+  <body>\
+          <h1>Alarm</h1>\
+          <input type='text' name='date_hh' id='date_hh' size=2 autofocus> WakeUpHour \
+          <input type='text' name='date_mm' id='date_mm' size=2 autofocus> WakeUpMinute \
+          <input type='text' name='date_ss' id='date_ss' size=2 autofocus> WakeUpCounter \
+          <div>\
+          <br><button id=\"save_button\">Kaydet</button>\
+          </div>\
+    <script src=\"https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js\"></script>\
+    <script>\
+      var hh;\
+      var mm;\
+      var ss;\
+      $('#save_button').click(function(e){\
+        e.preventDefault();\
+        hh = $('#date_hh').val();\
+        mm = $('#date_mm').val();\
+        ss = $('#date_ss').val();\
+        $.get('/save?hh=' + hh + '&mm=' + mm + '&ss=' + ss, function(data){\
+          console.log(data);\
+        });\
+      });\
+    </script>\
+  </body>\
+</html>");
+  server.send ( 200, "text/html", htmlResponse );
+}
+void handleSave()
+{
+  if (server.arg("hh") != "")
+  {
+    alarmhour = server.arg("hh").toInt();
+    EEPROM.write(eeprom_adress_0, alarmhour);
+    EEPROM.commit();
+  }
+  if (server.arg("mm") != "") {
+    alarmminute = server.arg("mm").toInt();
+    EEPROM.write(eeprom_adress_1, alarmminute);
+    EEPROM.commit();
+  }
+  if (server.arg("ss") != "") {
+    alarmcounter = server.arg("ss").toInt();
+    EEPROM.write(eeprom_adress_2, alarmcounter);
+    EEPROM.commit();
+  }
+}
